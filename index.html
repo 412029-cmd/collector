@@ -1,281 +1,532 @@
-import React, { useState, useEffect } from 'react';
-import { initializeApp } from 'firebase/app';
-import { 
-  getFirestore, 
-  collection, 
-  addDoc, 
-  onSnapshot, 
-  deleteDoc, 
-  doc, 
-  query, 
-  setDoc
-} from 'firebase/firestore';
-import { 
-  getAuth, 
-  signInAnonymously, 
-  signInWithCustomToken, 
-  onAuthStateChanged 
-} from 'firebase/auth';
-import { 
-  Plus, 
-  Trash2, 
-  ExternalLink, 
-  Cloud, 
-  Search, 
-  Tag, 
-  LogOut,
-  FolderOpen,
-  Loader2
-} from 'lucide-react';
-
-// --- Firebase Configuration ---
-const firebaseConfig = JSON.parse(__firebase_config);
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'cloud-vault-app';
-
-export default function App() {
-  const [user, setUser] = useState(null);
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [newItem, setNewItem] = useState({ title: '', url: '', tag: '' });
-  const [searchTerm, setSearchTerm] = useState('');
-
-  // 1. Authentication Lifecycle
-  useEffect(() => {
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (error) {
-        console.error("Auth error:", error);
-      }
-    };
-
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      if (!u) setLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // 2. Data Synchronization
-  useEffect(() => {
-    if (!user) return;
-
-    // Use Rule 1: Correct path structure
-    const collectionRef = collection(db, 'artifacts', appId, 'users', user.uid, 'collections');
-    
-    // Use Rule 2: Simple query, filter in JS
-    const unsubscribe = onSnapshot(collectionRef, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setItems(data);
-      setLoading(false);
-    }, (error) => {
-      console.error("Firestore error:", error);
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [user]);
-
-  // Actions
-  const handleAddItem = async (e) => {
-    e.preventDefault();
-    if (!newItem.title || !newItem.url || !user) return;
-
-    try {
-      const collectionRef = collection(db, 'artifacts', appId, 'users', user.uid, 'collections');
-      await addDoc(collectionRef, {
-        ...newItem,
-        createdAt: Date.now()
-      });
-      setNewItem({ title: '', url: '', tag: '' });
-    } catch (error) {
-      console.error("Add item error:", error);
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>我的雲端百寶箱</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    /* 額外微調與背景模糊補丁 */
+    .glass-panel {
+      background: rgba(15, 23, 42, 0.4);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
     }
-  };
+  </style>
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-blue-500/30 overflow-x-hidden">
 
-  const handleDeleteItem = async (id) => {
-    try {
-      const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'collections', id);
-      await deleteDoc(docRef);
-    } catch (error) {
-      console.error("Delete error:", error);
-    }
-  };
+  <!-- 背景動態霓虹光暈 -->
+  <div class="fixed inset-0 overflow-hidden pointer-events-none z-0">
+    <div class="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-blue-600/10 blur-[130px] rounded-full"></div>
+    <div class="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-purple-600/10 blur-[130px] rounded-full"></div>
+  </div>
 
-  const filteredItems = items.filter(item => 
-    item.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    item.tag.toLowerCase().includes(searchTerm.toLowerCase())
-  ).sort((a, b) => b.createdAt - a.createdAt);
+  <!-- 自訂 Toast 狀態提示框 -->
+  <div id="toast" class="fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-2xl backdrop-blur-md transition-all duration-300 transform translate-y-[-100px] opacity-0 flex items-center gap-2 border text-sm">
+    <span id="toast-text">提示訊息</span>
+  </div>
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
-      </div>
-    );
-  }
+  <!-- 全域讀取中遮罩 -->
+  <div id="global-loader" class="fixed inset-0 bg-slate-950 z-50 flex items-center justify-center transition-opacity duration-300">
+    <div class="flex flex-col items-center gap-3">
+      <i data-lucide="loader-2" class="w-10 h-10 animate-spin text-blue-500"></i>
+      <p class="text-slate-400 text-sm">正在與百寶箱建立連線...</p>
+    </div>
+  </div>
 
-  return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-blue-500/30">
-      {/* Background Decoration */}
-      <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600/10 blur-[120px] rounded-full"></div>
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-600/10 blur-[120px] rounded-full"></div>
-      </div>
-
-      <div className="relative z-10 max-w-5xl mx-auto px-4 py-8">
-        {/* Header */}
-        <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-12 gap-4">
-          <div>
-            <div className="flex items-center gap-3 mb-2">
-              <div className="p-2 bg-blue-600 rounded-xl shadow-lg shadow-blue-600/20">
-                <Cloud className="w-8 h-8 text-white" />
-              </div>
-              <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
-                CloudVault
-              </h1>
-            </div>
-            <p className="text-slate-400 text-sm">您的私人雲端收藏庫 · 即時同步</p>
+  <div class="relative z-10 max-w-5xl mx-auto px-4 py-8">
+    <!-- 頂部頁首 (Header) -->
+    <header class="flex flex-col md:flex-row justify-between items-start md:items-center mb-12 gap-4">
+      <div>
+        <div class="flex items-center gap-3 mb-2">
+          <div class="p-2 bg-blue-600 rounded-xl shadow-lg shadow-blue-600/20">
+            <i data-lucide="cloud" class="w-8 h-8 text-white"></i>
           </div>
-          
-          <div className="flex items-center gap-4 text-xs font-mono bg-slate-900/50 p-3 rounded-lg border border-slate-800">
-            <span className="text-slate-500">USER ID:</span>
-            <span className="text-blue-400">{user?.uid}</span>
-          </div>
-        </header>
+          <h1 class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
+            我的雲端百寶箱
+          </h1>
+        </div>
+        <p class="text-slate-400 text-sm">您的安全私人收藏庫 · 即時同步備份</p>
+      </div>
+      
+      <!-- 用戶登入資訊區塊 (預設隱藏) -->
+      <div id="user-profile" class="hidden flex-col sm:flex-row items-start sm:items-center gap-3 bg-slate-900/50 p-3 rounded-xl border border-slate-800 text-xs w-full sm:w-auto">
+        <div class="font-mono">
+          <span class="text-slate-500 block">帳號 ID / EMAIL:</span>
+          <span id="user-identity" class="text-blue-400">Loading...</span>
+        </div>
+        <button id="btn-logout" class="w-full sm:w-auto px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg flex items-center justify-center gap-1.5 transition-colors border border-slate-700">
+          <i data-lucide="log-out" class="w-3.5 h-3.5"></i>
+          登出
+        </button>
+      </div>
+    </header>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          {/* Sidebar / Form */}
-          <aside className="lg:col-span-4">
-            <div className="bg-slate-900/40 backdrop-blur-xl border border-slate-800 p-6 rounded-2xl sticky top-8">
-              <h2 className="text-xl font-semibold mb-6 flex items-center gap-2">
-                <Plus className="w-5 h-5 text-blue-500" />
-                新增收藏
-              </h2>
-              <form onSubmit={handleAddItem} className="space-y-4">
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1">標題</label>
-                  <input 
-                    type="text" 
-                    value={newItem.title}
-                    onChange={(e) => setNewItem({...newItem, title: e.target.value})}
-                    placeholder="例如：React 官方文檔"
-                    className="w-full bg-slate-800/50 border border-slate-700 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1">網址 (URL)</label>
-                  <input 
-                    type="url" 
-                    value={newItem.url}
-                    onChange={(e) => setNewItem({...newItem, url: e.target.value})}
-                    placeholder="https://..."
-                    className="w-full bg-slate-800/50 border border-slate-700 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1">標籤</label>
-                  <input 
-                    type="text" 
-                    value={newItem.tag}
-                    onChange={(e) => setNewItem({...newItem, tag: e.target.value})}
-                    placeholder="科技, 教學, 靈感..."
-                    className="w-full bg-slate-800/50 border border-slate-700 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
-                  />
-                </div>
-                <button 
-                  type="submit"
-                  className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-3 rounded-lg transition-colors shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2"
-                >
-                  <Plus className="w-5 h-5" />
-                  儲存到雲端
-                </button>
-              </form>
-            </div>
-          </aside>
+    <!-- 1. 未登入介面 (Auth Screen) -->
+    <div id="auth-screen" class="hidden max-w-md mx-auto my-12 glass-panel border border-slate-800 p-8 rounded-2xl text-center shadow-2xl">
+      <i data-lucide="cloud" class="w-16 h-16 text-blue-500 mx-auto mb-4 animate-pulse"></i>
+      <h2 class="text-2xl font-bold mb-2">歡迎使用雲端百寶箱</h2>
+      <p class="text-slate-400 text-sm mb-8">請登入以安全存取您的個人雲端收藏項目。</p>
+      
+      <div class="space-y-4">
+        <!-- Google 登入 -->
+        <button id="btn-google-login" class="w-full bg-white hover:bg-slate-100 text-slate-900 font-medium py-3 rounded-lg transition-colors flex items-center justify-center gap-2 shadow-lg">
+          <svg class="w-5 h-5" viewBox="0 0 24 24">
+            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+          </svg>
+          使用 Google 帳號登入
+        </button>
 
-          {/* Main Content / List */}
-          <main className="lg:col-span-8">
-            {/* Search Bar */}
-            <div className="relative mb-6">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
+        <!-- 訪客登入 -->
+        <button id="btn-anon-login" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-100 font-medium py-3 rounded-lg transition-colors flex items-center justify-center gap-2 border border-slate-700">
+          訪客登入 (匿名)
+        </button>
+      </div>
+    </div>
+
+    <!-- 2. 已登入主介面 (Main Dashboard) -->
+    <div id="main-dashboard" class="hidden grid grid-cols-1 lg:grid-cols-12 gap-8">
+      <!-- 側邊欄：新增表單 -->
+      <aside class="lg:col-span-4">
+        <div class="glass-panel border border-slate-800 p-6 rounded-2xl lg:sticky lg:top-8">
+          <h2 class="text-xl font-semibold mb-6 flex items-center gap-2">
+            <i data-lucide="plus" class="w-5 h-5 text-blue-500"></i>
+            新增百寶收藏
+          </h2>
+          <form id="add-item-form" class="space-y-4">
+            <div>
+              <label class="block text-sm text-slate-400 mb-1">標題</label>
               <input 
-                type="text"
-                placeholder="搜尋標題或標籤..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full bg-slate-900/40 backdrop-blur-xl border border-slate-800 rounded-xl pl-12 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
+                type="text" 
+                id="item-title"
+                placeholder="例如：設計參考網頁"
+                class="w-full bg-slate-800/50 border border-slate-700 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm text-white"
+                required
+              />
+            </div>
+            <div>
+              <label class="block text-sm text-slate-400 mb-1">網址 (URL)</label>
+              <input 
+                type="url" 
+                id="item-url"
+                placeholder="https://..."
+                class="w-full bg-slate-800/50 border border-slate-700 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm text-white"
+                required
+              />
+            </div>
+            <div>
+              <label class="block text-sm text-slate-400 mb-1">分類標籤</label>
+              <input 
+                type="text" 
+                id="item-tag"
+                placeholder="工具, 靈感, 教學..."
+                class="w-full bg-slate-800/50 border border-slate-700 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm text-white"
               />
             </div>
 
-            {/* Items Grid */}
-            {filteredItems.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-20 bg-slate-900/20 border border-dashed border-slate-800 rounded-2xl">
-                <FolderOpen className="w-12 h-12 text-slate-700 mb-4" />
-                <p className="text-slate-500">這裡空空如也，開始新增您的第一份收藏吧！</p>
+            <!-- 圖片上傳 & 預覽 -->
+            <div>
+              <label class="block text-sm text-slate-400 mb-1">縮圖 / 圖片</label>
+              
+              <!-- 尚未上傳狀態 -->
+              <label id="upload-placeholder" class="mt-1 flex flex-col items-center justify-center border-2 border-dashed border-slate-700 hover:border-blue-500/50 rounded-lg p-4 cursor-pointer hover:bg-slate-800/20 transition-all">
+                <i data-lucide="image" class="w-6 h-6 text-slate-500 mb-1"></i>
+                <span class="text-xs text-slate-400">選擇圖片 (限 1MB 內)</span>
+                <input 
+                  type="file" 
+                  id="image-file-input"
+                  accept="image/*" 
+                  class="hidden" 
+                />
+              </label>
+
+              <!-- 已上傳預覽狀態 -->
+              <div id="upload-preview-container" class="hidden relative mt-1 border border-slate-700 rounded-lg overflow-hidden bg-slate-800/80 p-2">
+                <img 
+                  id="upload-preview"
+                  src="" 
+                  alt="Preview" 
+                  class="w-full h-32 object-cover rounded-md"
+                />
+                <button
+                  type="button"
+                  id="btn-clear-image"
+                  class="absolute top-3 right-3 p-1.5 bg-slate-950/80 hover:bg-slate-900 rounded-full text-slate-300 transition-colors"
+                >
+                  <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
               </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {filteredItems.map((item) => (
-                  <div 
-                    key={item.id} 
-                    className="group bg-slate-900/40 backdrop-blur-xl border border-slate-800 p-5 rounded-2xl hover:border-blue-500/50 hover:bg-slate-800/40 transition-all duration-300"
-                  >
-                    <div className="flex justify-between items-start mb-3">
-                      <div className="flex-1 min-w-0">
-                        <h3 className="font-semibold text-lg truncate group-hover:text-blue-400 transition-colors">
-                          {item.title}
-                        </h3>
-                        {item.tag && (
-                          <div className="flex items-center gap-1 mt-1 text-xs text-slate-500">
-                            <Tag className="w-3 h-3" />
-                            <span>{item.tag}</span>
-                          </div>
-                        )}
-                      </div>
-                      <button 
-                        onClick={() => handleDeleteItem(item.id)}
-                        className="text-slate-600 hover:text-red-400 p-1 transition-colors"
-                        title="刪除"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                    
-                    <div className="mt-4 flex items-center justify-between">
-                      <span className="text-[10px] text-slate-600 uppercase tracking-widest font-mono">
-                        {new Date(item.createdAt).toLocaleDateString()}
-                      </span>
-                      <a 
-                        href={item.url} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-1.5 text-sm font-medium text-blue-500 hover:text-blue-400"
-                      >
-                        訪問連結
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </main>
+            </div>
+
+            <button 
+              type="submit"
+              class="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-3 rounded-lg transition-colors shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2 mt-2"
+            >
+              <i data-lucide="plus" class="w-5 h-5"></i>
+              儲存到百寶箱
+            </button>
+          </form>
         </div>
-      </div>
+      </aside>
+
+      <!-- 主要內容區域：搜尋與卡片 -->
+      <main class="lg:col-span-8">
+        <!-- 搜尋列 -->
+        <div class="relative mb-6">
+          <i data-lucide="search" class="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500"></i>
+          <input 
+            type="text"
+            id="search-input"
+            placeholder="搜尋標題、連結或標籤..."
+            class="w-full bg-slate-900/40 backdrop-blur-xl border border-slate-800 rounded-xl pl-12 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm text-white"
+          />
+        </div>
+
+        <!-- 收藏卡片網格 -->
+        <div id="items-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <!-- 卡片會由 JS 動態生成並注入於此 -->
+        </div>
+
+        <!-- 空狀態提示 -->
+        <div id="empty-state" class="hidden flex flex-col items-center justify-center py-20 bg-slate-900/20 border border-dashed border-slate-800 rounded-2xl">
+          <i data-lucide="folder-open" class="w-12 h-12 text-slate-700 mb-4"></i>
+          <p class="text-slate-500 text-sm">這裡空空如也，開始新增您的第一份珍藏吧！</p>
+        </div>
+      </main>
     </div>
-  );
-}
+  </div>
+
+  <!-- Firebase 11.6.1 SDK 與主要系統邏輯 (ES Modules) -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { 
+      getFirestore, 
+      collection, 
+      addDoc, 
+      onSnapshot, 
+      deleteDoc, 
+      doc 
+    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    import { 
+      getAuth, 
+      signInAnonymously, 
+      signInWithPopup, 
+      GoogleAuthProvider, 
+      signOut, 
+      onAuthStateChanged 
+    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+    // --- Firebase 設定資訊 ---
+    const firebaseConfig = {
+      apiKey: "AIzaSyCEli-f5FVEBFddVpTKqkmwFLotI3XoRrg",
+      authDomain: "collector-efe0a.firebaseapp.com",
+      projectId: "collector-efe0a",
+      storageBucket: "collector-efe0a.firebasestorage.app",
+      messagingSenderId: "327052073955",
+      appId: "1:327052073955:web:d6f541f89a7a41ad9eded6"
+    };
+
+    // 初始化 Firebase
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    const appId = 'cloud-vault-app';
+    const googleProvider = new GoogleAuthProvider();
+
+    // 系統狀態
+    let currentUser = null;
+    let localItems = [];
+    let imageBase64String = "";
+    let searchTerm = "";
+    let unsubscribeDatabase = null;
+
+    // DOM 節點
+    const globalLoader = document.getElementById('global-loader');
+    const authScreen = document.getElementById('auth-screen');
+    const mainDashboard = document.getElementById('main-dashboard');
+    const userProfile = document.getElementById('user-profile');
+    const userIdentity = document.getElementById('user-identity');
+    const itemsGrid = document.getElementById('items-grid');
+    const emptyState = document.getElementById('empty-state');
+    const toast = document.getElementById('toast');
+    const toastText = document.getElementById('toast-text');
+
+    // 表單與上傳
+    const addItemForm = document.getElementById('add-item-form');
+    const itemTitle = document.getElementById('item-title');
+    const itemUrl = document.getElementById('item-url');
+    const itemTag = document.getElementById('item-tag');
+    const imageFileInput = document.getElementById('image-file-input');
+    const uploadPlaceholder = document.getElementById('upload-placeholder');
+    const uploadPreviewContainer = document.getElementById('upload-preview-container');
+    const uploadPreview = document.getElementById('upload-preview');
+    const btnClearImage = document.getElementById('btn-clear-image');
+    const searchInput = document.getElementById('search-input');
+
+    // 按鈕
+    const btnGoogleLogin = document.getElementById('btn-google-login');
+    const btnAnonLogin = document.getElementById('btn-anon-login');
+    const btnLogout = document.getElementById('btn-logout');
+
+    // --- Toast 提示功能 ---
+    function showToast(message, type = 'success') {
+      toastText.textContent = message;
+      // 樣式調整
+      toast.className = `fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-2xl backdrop-blur-md transition-all duration-300 transform flex items-center gap-2 border text-sm ${
+        type === 'error' 
+          ? 'bg-red-500/20 border-red-500/40 text-red-200' 
+          : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-200'
+      }`;
+      
+      // 顯示
+      toast.classList.remove('opacity-0', 'translate-y-[-100px]');
+      toast.classList.add('opacity-100', 'translate-y-0');
+
+      // 關閉
+      setTimeout(() => {
+        toast.classList.remove('opacity-100', 'translate-y-0');
+        toast.classList.add('opacity-0', 'translate-y-[-100px]');
+      }, 3500);
+    }
+
+    // --- 圖片轉 Base64 處理 ---
+    imageFileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      if (file.size > 1024 * 1024) { // 限制 1MB
+        showToast("圖片大小不能超過 1MB", "error");
+        imageFileInput.value = "";
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        imageBase64String = reader.result;
+        uploadPreview.src = reader.result;
+        uploadPlaceholder.classList.add('hidden');
+        uploadPreviewContainer.classList.remove('hidden');
+      };
+      reader.readAsDataURL(file);
+    });
+
+    btnClearImage.addEventListener('click', () => {
+      imageBase64String = "";
+      imageFileInput.value = "";
+      uploadPlaceholder.classList.remove('hidden');
+      uploadPreviewContainer.classList.add('hidden');
+      uploadPreview.src = "";
+    });
+
+    // --- 渲染卡片 (由記憶體資料 filtered 後生成) ---
+    function renderCards() {
+      // 1. 篩選
+      const filtered = localItems.filter(item => {
+        const titleMatch = item.title.toLowerCase().includes(searchTerm.toLowerCase());
+        const tagMatch = item.tag ? item.tag.toLowerCase().includes(searchTerm.toLowerCase()) : false;
+        return titleMatch || tagMatch;
+      }).sort((a, b) => b.createdAt - a.createdAt);
+
+      // 2. 處理空狀態
+      if (filtered.length === 0) {
+        itemsGrid.classList.add('hidden');
+        emptyState.classList.remove('hidden');
+        return;
+      }
+
+      emptyState.classList.add('hidden');
+      itemsGrid.classList.remove('hidden');
+
+      // 3. 生成 DOM
+      itemsGrid.innerHTML = filtered.map(item => `
+        <div class="group bg-slate-900/40 backdrop-blur-xl border border-slate-800 rounded-2xl overflow-hidden hover:border-blue-500/50 hover:bg-slate-800/40 transition-all duration-300 flex flex-col">
+          ${item.image ? `
+            <div class="h-40 w-full overflow-hidden border-b border-slate-800/80">
+              <img src="${item.image}" alt="${item.title}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+            </div>
+          ` : ''}
+          <div class="p-5 flex-1 flex flex-col justify-between">
+            <div>
+              <div class="flex justify-between items-start mb-2 gap-2">
+                <h3 class="font-semibold text-lg truncate group-hover:text-blue-400 transition-colors flex-1 min-w-0" title="${item.title}">
+                  ${item.title}
+                </h3>
+                <button class="btn-delete text-slate-600 hover:text-red-400 p-1 transition-colors flex-shrink-0" data-id="${item.id}" title="刪除">
+                  <i data-lucide="trash-2" class="w-4 h-4"></i>
+                </button>
+              </div>
+              ${item.tag ? `
+                <div class="flex items-center gap-1.5 text-xs text-blue-400/80 bg-blue-500/10 px-2 py-0.5 rounded-full w-fit">
+                  <i data-lucide="tag" class="w-3 h-3"></i>
+                  <span>${item.tag}</span>
+                </div>
+              ` : ''}
+            </div>
+            <div class="mt-6 flex items-center justify-between">
+              <span class="text-[10px] text-slate-600 uppercase tracking-widest font-mono">
+                ${new Date(item.createdAt).toLocaleDateString()}
+              </span>
+              <a href="${item.url}" target="_blank" rel="noopener noreferrer" class="flex items-center gap-1.5 text-sm font-medium text-blue-500 hover:text-blue-400">
+                訪問連結
+                <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+              </a>
+            </div>
+          </div>
+        </div>
+      `).join('');
+
+      // 重新啟用 Lucide 圖示
+      lucide.createIcons();
+
+      // 為每個刪除按鈕註冊事件
+      document.querySelectorAll('.btn-delete').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const id = btn.getAttribute('data-id');
+          await handleDeleteItem(id);
+        });
+      });
+    }
+
+    // --- Firestore 即時資料流監聽 ---
+    function startDatabaseSync(user) {
+      if (unsubscribeDatabase) unsubscribeDatabase();
+
+      // RULE 1: 使用與先前一致的安全子目錄結構
+      const collectionRef = collection(db, 'artifacts', appId, 'users', user.uid, 'collections');
+
+      // RULE 2: 使用簡單 query 在前端記憶體處理排序和過濾
+      unsubscribeDatabase = onSnapshot(collectionRef, (snapshot) => {
+        localItems = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        renderCards();
+      }, (error) => {
+        console.error("Firestore error:", error);
+        showToast("資料讀取失敗，請確認資料庫 Rules 權限設定。", "error");
+      });
+    }
+
+    // --- 新增百寶收藏動作 ---
+    addItemForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!currentUser) return;
+
+      const title = itemTitle.value.trim();
+      const url = itemUrl.value.trim();
+      const tag = itemTag.value.trim();
+
+      try {
+        const collectionRef = collection(db, 'artifacts', appId, 'users', currentUser.uid, 'collections');
+        await addDoc(collectionRef, {
+          title,
+          url,
+          tag,
+          image: imageBase64String, // 儲存 Base64 圖片
+          createdAt: Date.now()
+        });
+
+        // 成功重設表單
+        itemTitle.value = "";
+        itemUrl.value = "";
+        itemTag.value = "";
+        btnClearImage.click(); // 清理圖片
+        showToast("成功新增至雲端百寶箱！");
+      } catch (error) {
+        console.error("Add failed:", error);
+        showToast("新增失敗，請檢查資料庫規則設定。", "error");
+      }
+    });
+
+    // --- 刪除百寶收藏動作 ---
+    async function handleDeleteItem(id) {
+      if (!currentUser) return;
+      try {
+        const docRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'collections', id);
+        await deleteDoc(docRef);
+        showToast("已成功刪除該筆珍藏");
+      } catch (error) {
+        console.error("Delete failed:", error);
+        showToast("刪除失敗", "error");
+      }
+    }
+
+    // --- 搜尋關鍵字輸入 ---
+    searchInput.addEventListener('input', (e) => {
+      searchTerm = e.target.value;
+      renderCards();
+    });
+
+    // --- 登入狀態監聽 Life Cycle ---
+    onAuthStateChanged(auth, (user) => {
+      currentUser = user;
+      globalLoader.classList.add('opacity-0');
+      setTimeout(() => globalLoader.classList.add('hidden'), 300);
+
+      if (user) {
+        // 登入成功
+        authScreen.classList.add('hidden');
+        mainDashboard.classList.remove('hidden');
+        userProfile.classList.remove('hidden');
+        userProfile.classList.add('flex');
+        userIdentity.textContent = user.email || user.uid;
+        
+        // 開啟同步
+        startDatabaseSync(user);
+      } else {
+        // 未登入狀態
+        authScreen.classList.remove('hidden');
+        mainDashboard.classList.add('hidden');
+        userProfile.classList.add('hidden');
+        userProfile.classList.remove('flex');
+        localItems = [];
+        
+        if (unsubscribeDatabase) {
+          unsubscribeDatabase();
+          unsubscribeDatabase = null;
+        }
+      }
+    });
+
+    // --- 登入與登出事件綁定 ---
+    btnGoogleLogin.addEventListener('click', async () => {
+      try {
+        await signInWithPopup(auth, googleProvider);
+        showToast("Google 登入成功！");
+      } catch (error) {
+        console.error(error);
+        showToast("登入失敗，請稍候重試。", "error");
+      }
+    });
+
+    btnAnonLogin.addEventListener('click', async () => {
+      try {
+        await signInAnonymously(auth);
+        showToast("已使用訪客身份登入");
+      } catch (error) {
+        console.error(error);
+        showToast("訪客登入失敗", "error");
+      }
+    });
+
+    btnLogout.addEventListener('click', async () => {
+      try {
+        await signOut(auth);
+        showToast("已登出帳號");
+      } catch (error) {
+        console.error(error);
+      }
+    });
+
+    // 初始化網頁圖示
+    lucide.createIcons();
+  </script>
+</body>
+</html>
